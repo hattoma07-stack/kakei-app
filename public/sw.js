@@ -1,7 +1,7 @@
 // ふたりの家計簿 — service worker
 // アプリ本体（同一オリジン）はネット優先＋オフライン時キャッシュ。
 // スプレッドシート同期など外部通信には一切介入しない。
-const CACHE = 'kakei-v1'
+const CACHE = 'kakei-v2'
 
 self.addEventListener('install', (e) => {
   self.skipWaiting()
