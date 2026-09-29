@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { DataApi } from '../hooks/useData'
+import { WORKER_URL } from '../config'
 
 function fmtTime(iso?: string) {
   if (!iso) return '—'
@@ -12,7 +13,6 @@ export default function SyncSection({ data }: { data: DataApi }) {
   // 接続済みなら初期は畳んでおく（接続先を普段は隠す）
   const [open, setOpen] = useState(!connected)
   const [showForm, setShowForm] = useState(false)
-  const [url, setUrl] = useState(data.syncConfig?.url ?? '')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -37,7 +37,7 @@ export default function SyncSection({ data }: { data: DataApi }) {
 
   async function connect() {
     setBusy(true)
-    const ok = await data.connectSync(url, password)
+    const ok = await data.connectSync(WORKER_URL, password)
     setBusy(false)
     if (ok) {
       setPassword('') // パスワードは保持しない
@@ -75,7 +75,7 @@ export default function SyncSection({ data }: { data: DataApi }) {
               onClick={() => setShowForm(true)}
               className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600"
             >
-              接続先を変更
+              再ログイン
             </button>
           </div>
           <button
@@ -92,17 +92,9 @@ export default function SyncSection({ data }: { data: DataApi }) {
       {open && (!connected || showForm) && (
         <div className="mt-3 space-y-2">
           <p className="text-xs leading-relaxed text-gray-500">
-            Cloudflare Worker（同期サーバー）の<b>URL</b>と、<b>ログインパスワード</b>を入力してください。
-            合言葉はこの端末には保存されません（ログイン後は短時間有効なセッションだけを保持します）。
+            <b>ログインパスワード</b>を入力してください。接続先はアプリに組み込み済みです。
+            パスワードはこの端末に保存されません（ログイン後は短時間有効なセッションだけを保持します）。
           </p>
-          <input
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="接続先URL（https://xxxx.workers.dev）"
-            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-            autoComplete="off"
-            spellCheck={false}
-          />
           <div className="flex gap-2">
             <input
               value={password}
@@ -124,10 +116,10 @@ export default function SyncSection({ data }: { data: DataApi }) {
           <div className="flex gap-2">
             <button
               onClick={connect}
-              disabled={busy || !url.trim() || !password.trim()}
+              disabled={busy || !password.trim()}
               className="flex-1 rounded-lg bg-gray-900 py-2 text-sm font-semibold text-white disabled:opacity-50"
             >
-              {busy ? '接続中…' : '接続してテスト'}
+              {busy ? 'ログイン中…' : 'ログイン'}
             </button>
             {connected && (
               <button onClick={() => setShowForm(false)} className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600">
