@@ -1,0 +1,14 @@
+# 依存関係
+node_modules/
+
+# ビルド成果物（デプロイ用。ソースから再生成できるため管理しない）
+dist/
+
+# OS / エディタ
+.DS_Store
+*.log
+
+# ローカル環境設定
+.env
+.env.local
+.claude/settings.local.json
