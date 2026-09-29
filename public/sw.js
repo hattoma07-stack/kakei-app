@@ -5,7 +5,8 @@ const CACHE = 'kakei-v1'
 
 self.addEventListener('install', (e) => {
   self.skipWaiting()
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['/', '/index.html'])))
+  // SW の配置場所（例: /kakei-app/）を基準にキャッシュする
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(['./', './index.html'])))
 })
 
 self.addEventListener('activate', (e) => {
@@ -27,6 +28,6 @@ self.addEventListener('fetch', (e) => {
         caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {})
         return res
       })
-      .catch(() => caches.match(req).then((hit) => hit || caches.match('/index.html'))),
+      .catch(() => caches.match(req).then((hit) => hit || caches.match('./index.html'))),
   )
 })
