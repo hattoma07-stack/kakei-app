@@ -3,53 +3,20 @@ import { store, type PendingOp, type SyncConfig } from './store'
 import { BUCKET_META } from '../data/seed'
 
 // ───────────────────────────────────────────────────────────
-// Google スプレッドシート同期（Apps Script Web アプリ経由）
+// 同期（Cloudflare Worker = 自社バックエンド経由）
 //
-// Apps Script は通常の fetch だと CORS で弾かれるため、確実に動く方式を使う：
-//   ・読み取り(pull) … JSONP（<script> 読み込み。CORS の制約を受けない）
-//   ・書き込み(flush) … fetch POST + mode:'no-cors'（送信はできるが応答は読めない）
-// 応答が読めない書き込みは、直後の pull で結果を突き合わせて確認する（reconcile）。
+//   ブラウザ → Worker → Apps Script → スプレッドシート
+//
+//   ・合言葉(GASの秘密)はブラウザに持たない。Worker の Secrets だけが持つ。
+//   ・ブラウザは /login でパスワードを送り、短命セッションを受け取る。
+//   ・以降 /pull・/flush はセッション(Bearer)で認証。Worker が CORS を返すので
+//     通常の fetch + JSON で読み書きできる（JSONP は不要）。
 // ───────────────────────────────────────────────────────────
 
 export interface PullResult {
   tx: Tx[]
   recurring: Recurring[]
   items: Item[]
-}
-
-// ───────────────────────────────────────────────────────────
-// HMAC 署名（合言葉を URL・本文に生では載せない）
-//   ・送るのは「HMAC-SHA256(合言葉, "アクション:時刻")」の署名だけ
-//   ・GAS 側は同じ計算で照合し、時刻の鮮度（±5分）も確認する
-//   ・エンコードは base64url（パディング無し）で GAS と揃える
-// ───────────────────────────────────────────────────────────
-
-function b64url(buf: ArrayBuffer): string {
-  const bytes = new Uint8Array(buf)
-  let bin = ''
-  for (const b of bytes) bin += String.fromCharCode(b)
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
-
-/** HMAC-SHA256(secret, message) を base64url で返す */
-async function hmac(secret: string, message: string): Promise<string> {
-  const enc = new TextEncoder()
-  const key = await crypto.subtle.importKey(
-    'raw',
-    enc.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign'],
-  )
-  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(message))
-  return b64url(sig)
-}
-
-/** アクション用の署名パラメータ（ts=時刻ミリ秒, sig=署名）を作る */
-async function authParams(cfg: SyncConfig, action: string): Promise<{ ts: string; sig: string }> {
-  const ts = String(Date.now())
-  const sig = await hmac(cfg.token, `${action}:${ts}`)
-  return { ts, sig }
 }
 
 // ── 送信用の行オブジェクト（シートで読みやすいよう費目名なども付ける） ──
@@ -111,44 +78,41 @@ function rowToItem(r: Record<string, unknown>): Item {
   }
 }
 
-/** JSONP でクロスオリジン取得（CORS を回避） */
-function jsonp(url: string, timeoutMs = 20000): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const cb = `kakei_cb_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`
-    const script = document.createElement('script')
-    let done = false
-    const cleanup = () => {
-      done = true
-      delete (window as any)[cb]
-      script.remove()
-      window.clearTimeout(timer)
-    }
-    const timer = window.setTimeout(() => {
-      if (!done) {
-        cleanup()
-        reject(new Error('接続がタイムアウトしました。URLとデプロイ設定を確認してください'))
-      }
-    }, timeoutMs)
-    ;(window as any)[cb] = (data: any) => {
-      if (done) return
-      cleanup()
-      resolve(data)
-    }
-    script.onerror = () => {
-      if (done) return
-      cleanup()
-      reject(new Error('接続に失敗しました。URL（/exec）とアクセス設定「全員」を確認してください'))
-    }
-    script.src = `${url}${url.includes('?') ? '&' : '?'}callback=${cb}`
-    document.body.appendChild(script)
-  })
+/** URL 末尾のスラッシュを整えてパスを連結 */
+function joinUrl(base: string, path: string): string {
+  return base.replace(/\/+$/, '') + '/' + path
 }
 
-/** 全件取得（JSONP。合言葉は載せず、署名のみ URL に付ける） */
+/** セッションを Authorization ヘッダに */
+function authHeader(cfg: SyncConfig): Record<string, string> {
+  return cfg.session ? { Authorization: `Bearer ${cfg.session}` } : {}
+}
+
+/** セッション切れ時に投げる目印（UI 側で「再ログイン」に案内する） */
+export const SESSION_EXPIRED = 'SESSION_EXPIRED'
+
+/** Worker にログインしてセッションを取得（パスワードは保存しない） */
+export async function login(workerUrl: string, password: string): Promise<string> {
+  let res: Response
+  try {
+    res = await fetch(joinUrl(workerUrl, 'login'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    })
+  } catch {
+    throw new Error('接続に失敗しました。WorkerのURLを確認してください')
+  }
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok || !data.session) throw new Error(data.error || 'ログインに失敗しました')
+  return data.session as string
+}
+
+/** 全件取得（Worker 経由。セッションで認証） */
 export async function pull(cfg: SyncConfig): Promise<PullResult> {
-  const { ts, sig } = await authParams(cfg, 'pull')
-  const url = `${cfg.url}?action=pull&ts=${ts}&sig=${encodeURIComponent(sig)}`
-  const data = await jsonp(url)
+  const res = await fetch(joinUrl(cfg.url, 'pull'), { headers: authHeader(cfg) })
+  if (res.status === 401) throw new Error(SESSION_EXPIRED)
+  const data = await res.json().catch(() => ({}))
   if (data && data.error) throw new Error(data.error)
   return {
     tx: (data.tx ?? []).map(rowToTx),
@@ -157,17 +121,16 @@ export async function pull(cfg: SyncConfig): Promise<PullResult> {
   }
 }
 
-/** 保留キューの操作を送信（no-cors。合言葉は載せず、署名で認証する） */
+/** 保留キューの操作を送信（Worker 経由。セッションで認証） */
 export async function flush(cfg: SyncConfig): Promise<void> {
   const pending = store.getPending()
   if (pending.length === 0) return
-  const { ts, sig } = await authParams(cfg, 'flush')
-  await fetch(cfg.url, {
+  const res = await fetch(joinUrl(cfg.url, 'flush'), {
     method: 'POST',
-    mode: 'no-cors',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ ts, sig, ops: pending }),
+    headers: { 'Content-Type': 'application/json', ...authHeader(cfg) },
+    body: JSON.stringify({ ops: pending }),
   })
+  if (res.status === 401) throw new Error(SESSION_EXPIRED)
 }
 
 /** pull 結果と保留キューを突き合わせ、反映済みの操作をキューから除く */

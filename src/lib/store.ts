@@ -18,10 +18,14 @@ const KEYS = {
   pins: 'kakei.pins.v1',
 }
 
-/** 同期設定（Apps Script の Web アプリ URL と合言葉） */
+/**
+ * 同期設定。
+ * url     : Cloudflare Worker（自社バックエンド）のURL
+ * session : ログインで得た短命セッション（秘密ではない。合言葉はブラウザに保存しない）
+ */
 export interface SyncConfig {
   url: string
-  token: string
+  session?: string
   lastSyncAt?: string
 }
 

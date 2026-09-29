@@ -7,12 +7,21 @@ import {
   enqueue,
   flush,
   itemToRow,
+  login,
   pull,
   reconcile,
   recurringToRow,
   rowConverters,
+  SESSION_EXPIRED,
   txToRow,
 } from '../lib/sync'
+
+/** 同期エラーを利用者向けの文言に変換 */
+function syncErrorMessage(e: unknown): string {
+  const msg = e instanceof Error ? e.message : String(e)
+  if (msg === SESSION_EXPIRED) return 'ログインの有効期限が切れました。「接続先を変更」から再ログインしてください'
+  return msg
+}
 
 export type SyncStatus = 'off' | 'idle' | 'syncing' | 'error'
 
@@ -84,7 +93,7 @@ export function useData() {
         setSyncConfig(saved)
         setSyncStatus('idle')
       } catch (e) {
-        setSyncError(e instanceof Error ? e.message : String(e))
+        setSyncError(syncErrorMessage(e))
         setSyncStatus('error')
       }
     },
@@ -249,12 +258,14 @@ export function useData() {
 
   // ── 同期の接続・解除 ──
   const connectSync = useCallback(
-    async (url: string, token: string) => {
-      const cfg: SyncConfig = { url: url.trim(), token: token.trim() }
+    async (url: string, password: string) => {
       setSyncStatus('syncing')
       setSyncError(null)
       try {
-        // まず接続確認を兼ねて取得
+        // まずログインして短命セッションを取得（パスワードは保存しない）
+        const session = await login(url.trim(), password)
+        const cfg: SyncConfig = { url: url.trim(), session }
+        // 接続確認を兼ねて取得
         const remote = await pull(cfg)
         const localTx = store.getTx()
         const localRec = store.getRecurring()
@@ -276,7 +287,7 @@ export function useData() {
         refreshPending()
         return true
       } catch (e) {
-        setSyncError(e instanceof Error ? e.message : String(e))
+        setSyncError(syncErrorMessage(e))
         setSyncStatus('error')
         return false
       }
