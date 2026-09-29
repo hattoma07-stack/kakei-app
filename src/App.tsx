@@ -34,7 +34,7 @@ export default function App() {
       <div
         className="fixed inset-0 -z-20"
         style={{
-          backgroundImage: 'url(/header-bg.jpg)',
+          backgroundImage: `url(${import.meta.env.BASE_URL}header-bg.jpg)`,
           backgroundSize: 'cover',
           backgroundPosition: 'center',
         }}
